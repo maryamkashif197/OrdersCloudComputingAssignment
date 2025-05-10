@@ -1,0 +1,122 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Event-Driven Order Notification System
+
+Resources:
+  # DynamoDB Table
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Orders
+      AttributeDefinitions:
+        - AttributeName: orderId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: orderId
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+
+  # SNS Topic
+  OrderTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: OrderTopic
+
+  # SQS Queue with DLQ
+  OrderQueueDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: OrderQueueDLQ
+
+  OrderQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: OrderQueue
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt OrderQueueDLQ.Arn
+        maxReceiveCount: 3
+
+  # SQS Subscription to SNS
+  QueueSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OrderTopic
+      Protocol: sqs
+      Endpoint: !GetAtt OrderQueue.Arn
+      RawMessageDelivery: true
+
+  # Lambda Execution Role
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                Resource: !GetAtt OrdersTable.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt OrderQueue.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+
+  # Lambda Function
+  OrderProcessorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: OrderProcessor
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table('Orders')
+
+          def lambda_handler(event, context):
+              for record in event['Records']:
+                  # Extract message from SQS -> SNS wrapper
+                  sns_message = json.loads(record['body'])
+                  message = json.loads(sns_message['Message'])  # Unwrap SNS payload
+                  
+                  # Validate required fields
+                  if 'orderId' not in message:
+                      raise ValueError("Missing 'orderId' in message")
+                      
+                  # Save to DynamoDB
+                  table.put_item(Item=message)
+                  print(f"Order {message['orderId']} saved to DynamoDB")
+              return {'statusCode': 200}
+
+  # Lambda Event Source Mapping
+  LambdaEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt OrderQueue.Arn
+      FunctionName: !GetAtt OrderProcessorLambda.Arn
+      BatchSize: 1
