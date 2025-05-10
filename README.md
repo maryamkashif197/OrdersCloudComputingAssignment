@@ -15,7 +15,7 @@ This project implements an **event-driven order processing system** for an e-com
 ---
 
 ## Architecture Diagram
-![System Architecture](architecture.png)  
+![System Architecture](CLOUD.drawio.png)  
 *Flow: Client -> SNS Topic → SQS Queue → Lambda → DynamoDB*
 
 ---
