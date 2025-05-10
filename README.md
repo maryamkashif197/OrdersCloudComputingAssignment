@@ -77,7 +77,7 @@ This project implements an **event-driven order processing system** for an e-com
 ### Step 5: Testing
 **Objective**: Validate the full event-driven flow.  
 **Steps**:    
-   - Go to **SNS Console** → **OrderTopic** → **Publish Message**. 
+1. Go to **SNS Console** → **OrderTopic** → **Publish Message**. 
 2. **Use this json**:
      
 {
